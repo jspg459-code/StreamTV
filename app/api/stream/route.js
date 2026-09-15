@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { buildLiveFallbackUrls, shouldFetchOnRelayHost, shouldRedirectToSource, toProxyStreamUrl } from '../../../lib/playlist/proxy.js';
+import { buildLiveFallbackUrls, shouldRedirectToSource } from '../../../lib/playlist/proxy.js';
 
 function isBlockedHost(hostname) {
   const host = hostname.toLowerCase();
@@ -35,13 +35,8 @@ export async function GET(request) {
       return NextResponse.json({ error: 'Source de flux refusée.' }, { status: 400 });
     }
 
-    // HTTP sources need the Railway HTTPS endpoint in the browser. Once the
-    // request has reached Railway, fetch the IPTV source directly instead of
-    // redirecting back to Railway (which would create a redirect loop).
-    if (target.protocol === 'http:' && !shouldFetchOnRelayHost(request.nextUrl.hostname)) {
-      return NextResponse.redirect(toProxyStreamUrl(target.toString()), 307);
-    }
-
+    // The frontend stores the HTTPS Railway relay URL for HTTP IPTV sources.
+    // Therefore the relay itself must always fetch the upstream source directly.
     const headers = {
       'User-Agent': 'StreamTV/1.0',
       'Accept': '*/*',
