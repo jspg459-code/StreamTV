@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Search, Home, Tv, Film, Clapperboard, Heart, ListVideo, Settings, Plus, Play, X, LogIn, LogOut, RefreshCw, Trash2 } from 'lucide-react';
+import { Search, Home, Tv, Film, Clapperboard, Heart, ListVideo, Settings, Plus, Play, X, LogIn, LogOut, RefreshCw, Trash2, Power, KeyRound } from 'lucide-react';
 import { supabase } from '../../lib/supabase/client.js';
 import { demoItems, hero } from '../../lib/demo-data.js';
+import { mapPlaylistForDisplay, playlistPatch } from '../../lib/playlist/manager.js';
 
 const nav = [
   ['home','Accueil',Home], ['live','TV en direct',Tv], ['movie','Films',Film], ['series','Séries',Clapperboard], ['favorites','Favoris',Heart], ['playlists','Mes playlists',ListVideo], ['settings','Paramètres',Settings]
@@ -11,9 +12,7 @@ const nav = [
 
 function Card({ item, favorite, onFavorite, onPlay }) {
   return <article className="media-card">
-    <button className="poster" onClick={() => onPlay(item)} aria-label={`Lire ${item.title}`}>
-      <img src={item.logo || hero.image} alt="" /><span className="play"><Play size={17} fill="currentColor" /></span>
-    </button>
+    <button className="poster" onClick={() => onPlay(item)} aria-label={`Lire ${item.title}`}><img src={item.logo || hero.image} alt="" /><span className="play"><Play size={17} fill="currentColor" /></span></button>
     <button className={`heart ${favorite ? 'selected' : ''}`} onClick={() => onFavorite(item.id)} aria-label="Ajouter aux favoris"><Heart size={18} fill={favorite ? 'currentColor' : 'none'} /></button>
     <div className="card-copy"><strong>{item.title}</strong><span>{item.subtitle || item.group}</span></div>
   </article>;
@@ -26,12 +25,16 @@ export default function StreamTV() {
   const [favorites, setFavorites] = useState([]);
   const [playlists, setPlaylists] = useState([]);
   const [playlistModal, setPlaylistModal] = useState(false);
+  const [sourceMode, setSourceMode] = useState('m3u');
   const [authModal, setAuthModal] = useState(false);
   const [authMode, setAuthMode] = useState('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [playlistName, setPlaylistName] = useState('');
   const [playlistUrl, setPlaylistUrl] = useState('');
+  const [xtreamServer, setXtreamServer] = useState('');
+  const [xtreamUsername, setXtreamUsername] = useState('');
+  const [xtreamPassword, setXtreamPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [user, setUser] = useState(null);
@@ -45,10 +48,9 @@ export default function StreamTV() {
     ]);
     const ownedPlaylists = pls || [];
     setPlaylists(ownedPlaylists);
-    const ids = (favs || []).map(x => x.media_item_id);
-    setFavorites(ids);
+    setFavorites((favs || []).map(x => x.media_item_id));
     if (ownedPlaylists.length) {
-      const { data: media } = await supabase.from('media_items').select('*').in('playlist_id', ownedPlaylists.map(x => x.id)).limit(10000);
+      const { data: media } = await supabase.from('media_items').select('*').in('playlist_id', ownedPlaylists.filter(p => p.enabled).map(x => x.id)).limit(10000);
       setItems((media || []).map(x => ({ id:x.id, title:x.title, group:x.group_name, logo:x.logo_url || hero.image, tvgId:x.tvg_id, streamUrl:x.stream_url, type:x.type, playlistId:x.playlist_id })));
     } else setItems(demoItems);
   }
@@ -63,15 +65,16 @@ export default function StreamTV() {
     let result = items;
     if (section === 'live' || section === 'movie' || section === 'series') result = result.filter(x => x.type === section);
     if (section === 'favorites') result = result.filter(x => favorites.includes(x.id));
-    if (search.trim()) { const q = search.toLowerCase(); result = result.filter(x => `${x.title} ${x.group} ${x.subtitle || ''}`.toLowerCase().includes(q)); }
+    if (search.trim()) { const q = search.toLowerCase(); result = result.filter(x => `${x.title} ${x.group || ''} ${x.subtitle || ''}`.toLowerCase().includes(q)); }
     return result;
   }, [items, section, favorites, search]);
 
   async function toggleFavorite(id) {
     if (!user) { setAuthModal(true); return; }
-    if (favorites.includes(id)) await supabase.from('favorites').delete().eq('user_id', user.id).eq('media_item_id', id);
-    else await supabase.from('favorites').insert({ user_id:user.id, media_item_id:id });
-    setFavorites(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+    const exists = favorites.includes(id);
+    const { error } = exists ? await supabase.from('favorites').delete().eq('user_id', user.id).eq('media_item_id', id) : await supabase.from('favorites').insert({ user_id:user.id, media_item_id:id });
+    if (error) { setMessage(error.message); return; }
+    setFavorites(prev => exists ? prev.filter(x => x !== id) : [...prev, id]);
   }
 
   async function authSubmit(e) {
@@ -85,25 +88,58 @@ export default function StreamTV() {
     if (!user) { setAuthModal(true); setMessage('Connecte-toi pour enregistrer ta playlist.'); return; }
     setLoading(true); setMessage('');
     try {
-      const response = await fetch('/api/playlist/parse', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ url: playlistUrl }) });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error);
-      const sourceType = playlistUrl.toLowerCase().includes('.m3u8') ? 'm3u8' : 'm3u';
-      const { data: playlist, error: playlistError } = await supabase.from('playlists').insert({ user_id:user.id, name:playlistName || 'Ma playlist', source_type:sourceType, source_url:playlistUrl, last_synced_at:new Date().toISOString() }).select().single();
+      let data;
+      let sourceType;
+      if (sourceMode === 'xtream') {
+        const response = await fetch('/api/playlist/xtream', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ server:xtreamServer, username:xtreamUsername, password:xtreamPassword }) });
+        data = await response.json();
+        if (!response.ok) throw new Error(data.error);
+        sourceType = 'xtream';
+      } else {
+        const response = await fetch('/api/playlist/parse', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ url:playlistUrl }) });
+        data = await response.json();
+        if (!response.ok) throw new Error(data.error);
+        sourceType = playlistUrl.toLowerCase().includes('.m3u8') ? 'm3u8' : 'm3u';
+      }
+      const { data: playlist, error: playlistError } = await supabase.from('playlists').insert({ user_id:user.id, name:playlistName || 'Ma playlist', source_type:sourceType, source_url:sourceMode === 'xtream' ? xtreamServer : playlistUrl, last_synced_at:new Date().toISOString() }).select().single();
       if (playlistError) throw playlistError;
-      const rows = data.items.filter(x => x.streamUrl).map(x => ({ playlist_id:playlist.id, type:x.type, title:x.title, group_name:x.group || null, stream_url:x.streamUrl, logo_url:x.logo || null, tvg_id:x.tvgId || null, metadata:x }));
+      const rows = (data.items || []).filter(x => x.streamUrl).map(x => ({ playlist_id:playlist.id, type:x.type, title:x.title, group_name:x.group || null, stream_url:x.streamUrl, logo_url:x.logo || null, tvg_id:x.tvgId || null, metadata:x }));
       for (let i=0; i<rows.length; i+=500) { const { error } = await supabase.from('media_items').insert(rows.slice(i,i+500)); if (error) throw error; }
       await loadAccount(user);
-      setMessage(`${data.count} contenus importés et enregistrés.`); setPlaylistUrl(''); setPlaylistName(''); setPlaylistModal(false);
+      setMessage(`${rows.length} contenus importés et enregistrés.`); resetPlaylistForm(); setPlaylistModal(false);
     } catch (error) { setMessage(error.message || 'Import impossible.'); }
+    finally { setLoading(false); }
+  }
+
+  function resetPlaylistForm() {
+    setPlaylistName(''); setPlaylistUrl(''); setXtreamServer(''); setXtreamUsername(''); setXtreamPassword('');
+  }
+
+  async function togglePlaylist(playlist) {
+    const patch = playlistPatch(playlist);
+    const { error } = await supabase.from('playlists').update(patch).eq('id', playlist.id).eq('user_id', user.id);
+    if (error) setMessage(error.message); else await loadAccount(user);
+  }
+
+  async function refreshPlaylist(playlist) {
+    if (playlist.source_type === 'xtream') { setMessage('Pour des raisons de sécurité, les identifiants Xtream ne sont pas conservés. Réimporte cette source pour la resynchroniser.'); return; }
+    setLoading(true); setMessage('Actualisation en cours...');
+    try {
+      const response = await fetch('/api/playlist/parse', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ url:playlist.source_url }) });
+      const data = await response.json(); if (!response.ok) throw new Error(data.error);
+      const { error: removeError } = await supabase.from('media_items').delete().eq('playlist_id', playlist.id); if (removeError) throw removeError;
+      const rows = data.items.filter(x => x.streamUrl).map(x => ({ playlist_id:playlist.id, type:x.type, title:x.title, group_name:x.group || null, stream_url:x.streamUrl, logo_url:x.logo || null, tvg_id:x.tvgId || null, metadata:x }));
+      for (let i=0; i<rows.length; i+=500) { const { error } = await supabase.from('media_items').insert(rows.slice(i,i+500)); if (error) throw error; }
+      await supabase.from('playlists').update({ last_synced_at:new Date().toISOString() }).eq('id', playlist.id).eq('user_id', user.id);
+      await loadAccount(user); setMessage(`${rows.length} contenus actualisés.`);
+    } catch (error) { setMessage(error.message || 'Actualisation impossible.'); }
     finally { setLoading(false); }
   }
 
   async function deletePlaylist(id) {
     if (!user || !confirm('Supprimer cette playlist et son catalogue ?')) return;
     const { error } = await supabase.from('playlists').delete().eq('id', id).eq('user_id', user.id);
-    if (!error) await loadAccount(user);
-    else setMessage(error.message);
+    if (!error) await loadAccount(user); else setMessage(error.message);
   }
 
   async function recordHistory(item, position = 0) {
@@ -117,16 +153,16 @@ export default function StreamTV() {
     <aside className="sidebar">
       <div className="brand"><span className="brand-mark">S</span><span>Stream<span>TV</span></span></div>
       <nav>{nav.map(([id,label,Icon]) => <button key={id} className={section === id ? 'nav-active' : ''} onClick={() => setSection(id)}><Icon size={19}/><span>{label}</span></button>)}</nav>
-      <div className="sidebar-bottom"><button className="add-side" onClick={() => setPlaylistModal(true)}><Plus size={18}/> <span>Ajouter une playlist</span></button><button onClick={() => setSection('settings')}><Settings size={18}/> <span>Paramètres</span></button></div>
+      <div className="sidebar-bottom"><button className="add-side" onClick={() => {setSourceMode('m3u');setMessage('');setPlaylistModal(true)}}><Plus size={18}/> <span>Ajouter une playlist</span></button><button onClick={() => setSection('settings')}><Settings size={18}/> <span>Paramètres</span></button></div>
     </aside>
     <section className="content">
       <header className="topbar"><div className="mobile-brand"><span className="brand-mark">S</span>Stream<span>TV</span></div><div className="search"><Search size={19}/><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Rechercher une chaîne, un film, une série..." /></div><button className="profile" onClick={() => setAuthModal(true)}>{user ? <><span>{(user.email || 'U')[0].toUpperCase()}</span><div><b>{user.email?.split('@')[0]}</b><small>Compte gratuit</small></div><LogOut size={15} onClick={(e)=>{e.stopPropagation();logout()}}/></> : <><span><LogIn size={16}/></span><div><b>Mon compte</b><small>Se connecter</small></div></>}</button></header>
-      {section === 'home' && <div className="hero"><img src={hero.image} alt=""/><div className="hero-gradient"/><div className="hero-copy"><span className="eyebrow">STREAMTV</span><h1>{hero.title}<br/><em>{hero.accent}</em></h1><p>{hero.text}</p><div className="hero-actions"><button className="primary" onClick={() => setPlaylistModal(true)}><Plus size={18}/> Ajouter une playlist</button><button className="secondary" onClick={() => setSection('live')}><Play size={17}/> Explorer le direct</button></div></div></div>}
-      <div className="page-head"><div><span className="eyebrow">VOTRE ESPACE</span><h2>{nav.find(x=>x[0]===section)?.[1] || 'Accueil'}</h2></div>{section !== 'settings' && <button className="outline" onClick={()=>setPlaylistModal(true)}>Gérer mes playlists</button>}</div>
-      {section === 'settings' ? <section className="settings-panel"><div><span className="eyebrow">COMPTE</span><h3>{user ? user.email : 'Mode découverte'}</h3><p>StreamTV V1 est gratuit. Vos playlists restent les vôtres.</p></div><button className="outline" onClick={()=>user ? logout() : setAuthModal(true)}>{user ? <><LogOut size={16}/> Déconnexion</> : <><LogIn size={16}/> Se connecter</>}</button></section> : section === 'playlists' ? <section className="playlist-panel"><div className="empty-icon"><ListVideo size={28}/></div><h3>Mes playlists</h3><p>{playlists.length ? 'Tes playlists enregistrées sont disponibles sur ton compte.' : 'Ajoute tes playlists M3U/M3U8 ou Xtream Codes pour remplir ton catalogue.'}</p>{playlists.map(p=><div className="playlist-line" key={p.id}><div><strong>{p.name}</strong><span>{p.source_type.toUpperCase()}</span></div><button className="outline" onClick={()=>deletePlaylist(p.id)}><Trash2 size={16}/> Supprimer</button></div>)}<button className="primary" onClick={()=>setPlaylistModal(true)}><Plus size={18}/> Ajouter une playlist</button></section> : <section className="media-row"><div className="section-title"><h3>{search ? `${visible.length} résultat${visible.length>1?'s':''}` : 'Votre catalogue'}</h3>{!search && <span>Synchronisé <RefreshCw size={14}/></span>}</div>{visible.length ? <div className="grid">{visible.map(item=><Card key={item.id} item={item} favorite={favorites.includes(item.id)} onFavorite={toggleFavorite} onPlay={item=>{recordHistory(item);setPlayItem(item)}}/>)}</div> : <div className="empty">Aucun contenu dans cette section.</div>}</section>}
+      {section === 'home' && <div className="hero"><img src={hero.image} alt=""/><div className="hero-gradient"/><div className="hero-copy"><span className="eyebrow">STREAMTV</span><h1>{hero.title}<br/><em>{hero.accent}</em></h1><p>{hero.text}</p><div className="hero-actions"><button className="primary" onClick={() => {setSourceMode('m3u');setPlaylistModal(true)}}><Plus size={18}/> Ajouter une playlist</button><button className="secondary" onClick={() => setSection('live')}><Play size={17}/> Explorer le direct</button></div></div></div>}
+      <div className="page-head"><div><span className="eyebrow">VOTRE ESPACE</span><h2>{nav.find(x=>x[0]===section)?.[1] || 'Accueil'}</h2></div>{section !== 'settings' && <button className="outline" onClick={()=>setSection('playlists')}>Gérer mes playlists</button>}</div>
+      {section === 'settings' ? <section className="settings-panel"><div><span className="eyebrow">COMPTE</span><h3>{user ? user.email : 'Mode découverte'}</h3><p>StreamTV V1 est gratuit. Vos playlists restent les vôtres.</p></div><button className="outline" onClick={()=>user ? logout() : setAuthModal(true)}>{user ? <><LogOut size={16}/> Déconnexion</> : <><LogIn size={16}/> Se connecter</>}</button></section> : section === 'playlists' ? <section className="playlist-panel"><div className="empty-icon"><ListVideo size={28}/></div><h3>Mes playlists</h3><p>{playlists.length ? 'Gère ici tes sources et leur synchronisation.' : 'Ajoute tes playlists M3U/M3U8 ou Xtream Codes pour remplir ton catalogue.'}</p>{playlists.map(p=>{const view=mapPlaylistForDisplay(p); return <div className="playlist-line" key={p.id}><div><strong>{view.name}</strong><span>{view.sourceType} • {view.enabled ? 'Activée' : 'Désactivée'}{view.lastSyncedAt ? ` • ${new Date(view.lastSyncedAt).toLocaleString('fr-FR')}` : ''}</span></div><div className="playlist-actions"><button className="outline" onClick={()=>togglePlaylist(p)}><Power size={15}/> {view.enabled ? 'Désactiver' : 'Activer'}</button><button className="outline" disabled={loading} onClick={()=>refreshPlaylist(p)}><RefreshCw size={15}/> Actualiser</button><button className="outline danger" onClick={()=>deletePlaylist(p.id)}><Trash2 size={15}/> Supprimer</button></div></div>})}<button className="primary" onClick={()=>{setSourceMode('m3u');setMessage('');setPlaylistModal(true)}}><Plus size={18}/> Ajouter une playlist</button>{message && <div className="notice">{message}</div>}</section> : <section className="media-row"><div className="section-title"><h3>{search ? `${visible.length} résultat${visible.length>1?'s':''}` : 'Votre catalogue'}</h3>{!search && <span>Synchronisé <RefreshCw size={14}/></span>}</div>{visible.length ? <div className="grid">{visible.map(item=><Card key={item.id} item={item} favorite={favorites.includes(item.id)} onFavorite={toggleFavorite} onPlay={item=>{recordHistory(item);setPlayItem(item)}}/>)}</div> : <div className="empty">Aucun contenu dans cette section.</div>}</section>}
       <footer><div className="brand"><span className="brand-mark">S</span><span>Stream<span>TV</span></span></div><span>Vos playlists. Votre expérience.</span><span>V1 • Gratuit</span></footer>
     </section>
-    {playlistModal && <div className="modal-backdrop" onClick={()=>setPlaylistModal(false)}><div className="modal" onClick={e=>e.stopPropagation()}><button className="close" onClick={()=>setPlaylistModal(false)}><X/></button><span className="eyebrow">NOUVELLE SOURCE</span><h3>Ajouter une playlist</h3><p>Importe uniquement des flux que tu es autorisé à utiliser.</p><div className="source-tabs"><b>M3U / M3U8</b><span>Xtream Codes bientôt</span></div><form onSubmit={importPlaylist}><input required value={playlistName} onChange={e=>setPlaylistName(e.target.value)} placeholder="Nom de la playlist"/><input required type="url" value={playlistUrl} onChange={e=>setPlaylistUrl(e.target.value)} placeholder="https://exemple.com/playlist.m3u"/><button className="primary full" disabled={loading}>{loading ? 'Import en cours...' : 'Importer la playlist'}</button></form>{message && <div className="notice">{message}</div>}</div></div>}
+    {playlistModal && <div className="modal-backdrop" onClick={()=>setPlaylistModal(false)}><div className="modal" onClick={e=>e.stopPropagation()}><button className="close" onClick={()=>setPlaylistModal(false)}><X/></button><span className="eyebrow">NOUVELLE SOURCE</span><h3>Ajouter une playlist</h3><p>Utilise uniquement des flux que tu es autorisé à regarder.</p><div className="source-tabs"><button className={sourceMode==='m3u'?'tab-active':''} onClick={()=>setSourceMode('m3u')}>M3U / M3U8</button><button className={sourceMode==='xtream'?'tab-active':''} onClick={()=>setSourceMode('xtream')}><KeyRound size={15}/> Xtream Codes</button></div><form onSubmit={importPlaylist}><input required value={playlistName} onChange={e=>setPlaylistName(e.target.value)} placeholder="Nom de la playlist"/>{sourceMode==='xtream' ? <><input required type="url" value={xtreamServer} onChange={e=>setXtreamServer(e.target.value)} placeholder="https://serveur.exemple.com"/><input required value={xtreamUsername} onChange={e=>setXtreamUsername(e.target.value)} placeholder="Identifiant"/><input required type="password" value={xtreamPassword} onChange={e=>setXtreamPassword(e.target.value)} placeholder="Mot de passe"/></> : <input required type="url" value={playlistUrl} onChange={e=>setPlaylistUrl(e.target.value)} placeholder="https://exemple.com/playlist.m3u"/>}<button className="primary full" disabled={loading}>{loading ? 'Import en cours...' : sourceMode==='xtream' ? 'Connecter Xtream Codes' : 'Importer la playlist'}</button></form>{message && <div className="notice">{message}</div>}</div></div>}
     {authModal && <div className="modal-backdrop" onClick={()=>setAuthModal(false)}><div className="modal" onClick={e=>e.stopPropagation()}><button className="close" onClick={()=>setAuthModal(false)}><X/></button><span className="eyebrow">STREAMTV</span><h3>{authMode === 'login' ? 'Bienvenue' : 'Créer mon compte'}</h3><p>Ton compte permet de retrouver tes playlists et préférences.</p><form onSubmit={authSubmit}><input required type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="Adresse email"/><input required minLength={6} type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="Mot de passe"/><button className="primary full" disabled={loading}>{loading ? 'Patiente...' : authMode === 'login' ? 'Se connecter' : 'Créer le compte'}</button></form>{message && <div className="notice">{message}</div>}<button className="switch" onClick={()=>{setAuthMode(authMode==='login'?'signup':'login');setMessage('')}}>{authMode==='login' ? 'Créer un compte gratuitement' : 'J’ai déjà un compte'}</button></div></div>}
     {playItem && <div className="modal-backdrop" onClick={()=>setPlayItem(null)}><div className="player-modal" onClick={e=>e.stopPropagation()}><button className="close" onClick={()=>setPlayItem(null)}><X/></button>{playItem.streamUrl ? <video controls autoPlay src={playItem.streamUrl} onTimeUpdate={e=>{if(Math.floor(e.currentTime)%10===0) recordHistory(playItem,e.currentTime)}}/> : <div className="demo-player"><Play size={42} fill="currentColor"/><h3>{playItem.title}</h3><p>Ajoute une playlist avec un flux autorisé pour lancer la lecture.</p></div>}</div></div>}
   </main>;
