@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { buildXtreamPlaylistUrl, normalizeXtreamItems } from '../../lib/playlist/xtream.js';
+import { buildXtreamPlaylistUrl, normalizeXtreamItems, normalizeXtreamServer } from '../../lib/playlist/xtream.js';
 
 describe('Xtream helpers', () => {
   it('builds a playlist endpoint without exposing credentials in logs', () => {
     expect(buildXtreamPlaylistUrl('https://provider.example/', 'demo', 'secret')).toBe('https://provider.example/get.php?username=demo&password=secret&type=m3u_plus&output=ts');
+  });
+
+  it('accepts the server field used by the import form', () => {
+    expect(normalizeXtreamServer({ server: 'https://provider.example/' })).toBe('https://provider.example');
+    expect(normalizeXtreamServer({ baseUrl: 'https://provider.example/' })).toBe('https://provider.example');
   });
 
   it('normalizes live, movie and series entries', () => {
