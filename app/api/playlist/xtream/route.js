@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { parseM3U } from '../../../../lib/playlist/m3u.js';
-import { buildXtreamApiUrl, buildXtreamPlaylistUrl, normalizeXtreamItems, normalizeXtreamServer } from '../../../../lib/playlist/xtream.js';
+import { buildXtreamApiUrl, buildXtreamPlaylistUrl, normalizeXtreamItems, normalizeXtreamServer, toXtreamPlaybackUrl } from '../../../../lib/playlist/xtream.js';
 import { toProxyStreamUrl } from '../../../../lib/playlist/proxy.js';
 
 const fetchOptions = {
@@ -10,7 +10,10 @@ const fetchOptions = {
 };
 
 function proxyItems(items) {
-  return items.map(item => ({ ...item, streamUrl: toProxyStreamUrl(item.streamUrl) }));
+  return items.map(item => ({
+    ...item,
+    streamUrl: toProxyStreamUrl(toXtreamPlaybackUrl(item.streamUrl, item.type)),
+  }));
 }
 
 async function fetchXtreamApi(baseUrl, username, password, action) {
