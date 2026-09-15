@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { buildXtreamPlaylistUrl, normalizeXtreamItems, normalizeXtreamServer } from '../../lib/playlist/xtream.js';
+import { buildXtreamApiUrl, buildXtreamPlaylistUrl, normalizeXtreamItems, normalizeXtreamServer } from '../../lib/playlist/xtream.js';
 
 describe('Xtream helpers', () => {
   it('builds a playlist endpoint without exposing credentials in logs', () => {
     expect(buildXtreamPlaylistUrl('https://provider.example/', 'demo', 'secret')).toBe('https://provider.example/get.php?username=demo&password=secret&type=m3u_plus&output=ts');
+  });
+
+  it('builds the Xtream player API endpoint for providers that block get.php', () => {
+    expect(buildXtreamApiUrl('https://provider.example/', 'demo', 'secret')).toBe('https://provider.example/player_api.php?username=demo&password=secret');
   });
 
   it('accepts the server field used by the import form', () => {
