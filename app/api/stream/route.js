@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { shouldRedirectToSource } from '../../../lib/playlist/proxy.js';
+import { buildLiveFallbackUrls, shouldRedirectToSource } from '../../../lib/playlist/proxy.js';
 
 function isBlockedHost(hostname) {
   const host = hostname.toLowerCase();
@@ -35,32 +35,46 @@ export async function GET(request) {
       return NextResponse.json({ error: 'Source de flux refusée.' }, { status: 400 });
     }
 
-    const headers = { 'User-Agent': 'StreamTV/1.0' };
+    const headers = {
+      'User-Agent': 'StreamTV/1.0',
+      'Accept': '*/*',
+    };
     const range = request.headers.get('range');
     if (range) headers.Range = range;
 
-    const upstream = await fetch(target, {
-      redirect: 'follow',
-      headers,
-      signal: AbortSignal.timeout(30000),
-    });
+    const candidates = buildLiveFallbackUrls(target.toString());
+    let upstream = null;
+    let upstreamTarget = target;
 
-    if (!upstream.ok) {
-      if (shouldRedirectToSource(upstream.status, target.protocol)) {
-        return NextResponse.redirect(target.toString(), 307);
+    for (const candidate of candidates) {
+      const candidateUrl = new URL(candidate);
+      const response = await fetch(candidateUrl, {
+        redirect: 'follow',
+        headers,
+        signal: AbortSignal.timeout(30000),
+      });
+      upstream = response;
+      upstreamTarget = candidateUrl;
+      if (response.ok || response.status !== 511) break;
+    }
+
+    if (!upstream?.ok) {
+      if (upstream && shouldRedirectToSource(upstream.status, upstreamTarget.protocol)) {
+        return NextResponse.redirect(upstreamTarget.toString(), 307);
       }
-      return new NextResponse(null, { status: upstream.status });
+      return new NextResponse(null, { status: upstream?.status || 502 });
     }
 
     const contentType = upstream.headers.get('content-type') || '';
-    const isHls = /mpegurl|m3u8/i.test(contentType) || /\.m3u8(?:$|\?)/i.test(target.pathname + target.search);
+    const isHls = /mpegurl|m3u8/i.test(contentType) || /\.m3u8(?:$|\?)/i.test(upstreamTarget.pathname + upstreamTarget.search);
     if (isHls) {
       const text = await upstream.text();
-      return new NextResponse(rewriteM3u8(text, upstream.url || target.toString()), {
+      return new NextResponse(rewriteM3u8(text, upstream.url || upstreamTarget.toString()), {
         status: upstream.status,
         headers: {
           'Content-Type': 'application/vnd.apple.mpegurl',
           'Cache-Control': 'no-store, no-cache, must-revalidate',
+          'Access-Control-Allow-Origin': '*',
         },
       });
     }
@@ -70,6 +84,7 @@ export async function GET(request) {
       const value = upstream.headers.get(name);
       if (value) responseHeaders.set(name, value);
     }
+    responseHeaders.set('Access-Control-Allow-Origin', '*');
     return new NextResponse(upstream.body, { status: upstream.status, headers: responseHeaders });
   } catch (error) {
     const message = error?.name === 'TimeoutError' || error?.name === 'AbortError' ? 'Le flux met trop de temps à répondre.' : 'Impossible de joindre le flux.';
