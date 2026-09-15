@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { shouldRedirectToSource } from '../../../lib/playlist/proxy.js';
 
 function isBlockedHost(hostname) {
   const host = hostname.toLowerCase();
@@ -43,13 +44,19 @@ export async function GET(request) {
       headers,
       signal: AbortSignal.timeout(30000),
     });
-    if (!upstream.ok) return new NextResponse(null, { status: upstream.status });
+
+    if (!upstream.ok) {
+      if (shouldRedirectToSource(upstream.status, target.protocol)) {
+        return NextResponse.redirect(target.toString(), 307);
+      }
+      return new NextResponse(null, { status: upstream.status });
+    }
 
     const contentType = upstream.headers.get('content-type') || '';
     const isHls = /mpegurl|m3u8/i.test(contentType) || /\.m3u8(?:$|\?)/i.test(target.pathname + target.search);
     if (isHls) {
       const text = await upstream.text();
-      return new NextResponse(rewriteM3u8(text, target.toString()), {
+      return new NextResponse(rewriteM3u8(text, upstream.url || target.toString()), {
         status: upstream.status,
         headers: {
           'Content-Type': 'application/vnd.apple.mpegurl',
