@@ -1,12 +1,17 @@
 import { NextResponse } from 'next/server';
 import { parseM3U } from '../../../../lib/playlist/m3u.js';
 import { buildXtreamApiUrl, buildXtreamPlaylistUrl, normalizeXtreamItems, normalizeXtreamServer } from '../../../../lib/playlist/xtream.js';
+import { toProxyStreamUrl } from '../../../../lib/playlist/proxy.js';
 
 const fetchOptions = {
   redirect: 'follow',
   headers: { 'User-Agent': 'StreamTV/1.0' },
   signal: AbortSignal.timeout(20000),
 };
+
+function proxyItems(items) {
+  return items.map(item => ({ ...item, streamUrl: toProxyStreamUrl(item.streamUrl) }));
+}
 
 async function fetchXtreamApi(baseUrl, username, password, action) {
   const response = await fetch(buildXtreamApiUrl(baseUrl, username, password, action), fetchOptions);
@@ -38,7 +43,7 @@ async function importViaPlayerApi(baseUrl, username, password) {
   };
 
   const items = normalizeXtreamItems(payload, baseUrl).filter(x => x.streamUrl).slice(0, 10000);
-  return items.length ? items : null;
+  return items.length ? proxyItems(items) : null;
 }
 
 export async function POST(request) {
@@ -57,7 +62,7 @@ export async function POST(request) {
     if (response.ok) {
       const text = await response.text();
       const items = parseM3U(text).slice(0, 10000);
-      if (items.length) return NextResponse.json({ count: items.length, items });
+      if (items.length) return NextResponse.json({ count: items.length, items: proxyItems(items) });
     } else {
       const fallbackItems = await importViaPlayerApi(baseUrl, username, password);
       if (fallbackItems) return NextResponse.json({ count: fallbackItems.length, items: fallbackItems });
