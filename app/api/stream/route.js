@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { buildLiveFallbackUrls, shouldRedirectToSource, toProxyStreamUrl } from '../../../lib/playlist/proxy.js';
+import { buildLiveFallbackUrls, shouldFetchOnRelayHost, shouldRedirectToSource, toProxyStreamUrl } from '../../../lib/playlist/proxy.js';
 
 function isBlockedHost(hostname) {
   const host = hostname.toLowerCase();
@@ -35,9 +35,10 @@ export async function GET(request) {
       return NextResponse.json({ error: 'Source de flux refusée.' }, { status: 400 });
     }
 
-    // HTTP IPTV sources cannot be fetched reliably from Vercel's egress.
-    // Redirect them to the dedicated Railway relay so existing saved URLs keep working.
-    if (target.protocol === 'http:') {
+    // HTTP sources need the Railway HTTPS endpoint in the browser. Once the
+    // request has reached Railway, fetch the IPTV source directly instead of
+    // redirecting back to Railway (which would create a redirect loop).
+    if (target.protocol === 'http:' && !shouldFetchOnRelayHost(request.nextUrl.hostname)) {
       return NextResponse.redirect(toProxyStreamUrl(target.toString()), 307);
     }
 
@@ -61,7 +62,7 @@ export async function GET(request) {
       });
       upstream = response;
       upstreamTarget = candidateUrl;
-      if (response.ok || response.status !== 511) break;
+      if (response.ok || ![456, 511].includes(response.status)) break;
     }
 
     if (!upstream?.ok) {
