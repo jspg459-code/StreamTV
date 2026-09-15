@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Search, Home, Tv, Film, Clapperboard, Heart, ListVideo, Settings, Plus, Play, X, LogIn, LogOut, RefreshCw, Trash2, Power, KeyRound } from 'lucide-react';
+import { Search, Home, Tv, Film, Clapperboard, Heart, ListVideo, Settings, Plus, Play, X, LogIn, LogOut, RefreshCw, Trash2, Power, KeyRound, Menu } from 'lucide-react';
 import { supabase } from '../../lib/supabase/client.js';
 import { demoItems, hero } from '../../lib/demo-data.js';
 import { mapPlaylistForDisplay, playlistPatch } from '../../lib/playlist/manager.js';
@@ -39,6 +39,7 @@ export default function StreamTV() {
   const [message, setMessage] = useState('');
   const [user, setUser] = useState(null);
   const [playItem, setPlayItem] = useState(null);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   async function loadAccount(account) {
     if (!account) { setPlaylists([]); setItems(demoItems); setFavorites([]); return; }
@@ -149,14 +150,29 @@ export default function StreamTV() {
 
   async function logout() { await supabase.auth.signOut(); setUser(null); }
 
+  function selectSection(id) {
+    setSection(id);
+    setMenuOpen(false);
+  }
+
   return <main className="app-shell">
-    <aside className="sidebar">
-      <div className="brand"><span className="brand-mark">S</span><span>Stream<span>TV</span></span></div>
-      <nav>{nav.map(([id,label,Icon]) => <button key={id} className={section === id ? 'nav-active' : ''} onClick={() => setSection(id)}><Icon size={19}/><span>{label}</span></button>)}</nav>
-      <div className="sidebar-bottom"><button className="add-side" onClick={() => {setSourceMode('m3u');setMessage('');setPlaylistModal(true)}}><Plus size={18}/> <span>Ajouter une playlist</span></button><button onClick={() => setSection('settings')}><Settings size={18}/> <span>Paramètres</span></button></div>
-    </aside>
+    {menuOpen && <button className="menu-backdrop" aria-label="Fermer le menu" onClick={() => setMenuOpen(false)} />}
     <section className="content">
-      <header className="topbar"><div className="mobile-brand"><span className="brand-mark">S</span>Stream<span>TV</span></div><div className="search"><Search size={19}/><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Rechercher une chaîne, un film, une série..." /></div><button className="profile" onClick={() => setAuthModal(true)}>{user ? <><span>{(user.email || 'U')[0].toUpperCase()}</span><div><b>{user.email?.split('@')[0]}</b><small>Compte gratuit</small></div><LogOut size={15} onClick={(e)=>{e.stopPropagation();logout()}}/></> : <><span><LogIn size={16}/></span><div><b>Mon compte</b><small>Se connecter</small></div></>}</button></header>
+      <header className="topbar">
+        <div className="topbar-left">
+          <button className={`menu-toggle ${menuOpen ? 'menu-toggle-active' : ''}`} onClick={() => setMenuOpen(prev => !prev)} aria-label={menuOpen ? 'Fermer le menu' : 'Ouvrir le menu'} aria-expanded={menuOpen}><Menu size={22}/></button>
+          <div className="mobile-brand"><span className="brand-mark">S</span>Stream<span>TV</span></div>
+        </div>
+        <div className="search"><Search size={19}/><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Rechercher une chaîne, un film, une série..." /></div>
+        <button className="profile" onClick={() => setAuthModal(true)}>{user ? <><span>{(user.email || 'U')[0].toUpperCase()}</span><div><b>{user.email?.split('@')[0]}</b><small>Compte gratuit</small></div><LogOut size={15} onClick={(e)=>{e.stopPropagation();logout()}}/></> : <><span><LogIn size={16}/></span><div><b>Mon compte</b><small>Se connecter</small></div></>}</button>
+      </header>
+
+      {menuOpen && <aside className="dropdown-menu" aria-label="Navigation principale">
+        <div className="dropdown-brand"><span className="brand-mark">S</span><div><strong>Stream<span>TV</span></strong><small>Votre télévision. Partout avec vous.</small></div></div>
+        <nav>{nav.map(([id,label,Icon]) => <button key={id} className={section === id ? 'nav-active' : ''} onClick={() => selectSection(id)}><Icon size={19}/><span>{label}</span></button>)}</nav>
+        <div className="dropdown-bottom"><button className="add-side" onClick={() => {setSourceMode('m3u');setMessage('');setPlaylistModal(true);setMenuOpen(false)}}><Plus size={18}/> <span>Ajouter une playlist</span></button></div>
+      </aside>}
+
       {section === 'home' && <div className="hero"><img src={hero.image} alt=""/><div className="hero-gradient"/><div className="hero-copy"><span className="eyebrow">STREAMTV</span><h1>{hero.title}<br/><em>{hero.accent}</em></h1><p>{hero.text}</p><div className="hero-actions"><button className="primary" onClick={() => {setSourceMode('m3u');setPlaylistModal(true)}}><Plus size={18}/> Ajouter une playlist</button><button className="secondary" onClick={() => setSection('live')}><Play size={17}/> Explorer le direct</button></div></div></div>}
       <div className="page-head"><div><span className="eyebrow">VOTRE ESPACE</span><h2>{nav.find(x=>x[0]===section)?.[1] || 'Accueil'}</h2></div>{section !== 'settings' && <button className="outline" onClick={()=>setSection('playlists')}>Gérer mes playlists</button>}</div>
       {section === 'settings' ? <section className="settings-panel"><div><span className="eyebrow">COMPTE</span><h3>{user ? user.email : 'Mode découverte'}</h3><p>StreamTV V1 est gratuit. Vos playlists restent les vôtres.</p></div><button className="outline" onClick={()=>user ? logout() : setAuthModal(true)}>{user ? <><LogOut size={16}/> Déconnexion</> : <><LogIn size={16}/> Se connecter</>}</button></section> : section === 'playlists' ? <section className="playlist-panel"><div className="empty-icon"><ListVideo size={28}/></div><h3>Mes playlists</h3><p>{playlists.length ? 'Gère ici tes sources et leur synchronisation.' : 'Ajoute tes playlists M3U/M3U8 ou Xtream Codes pour remplir ton catalogue.'}</p>{playlists.map(p=>{const view=mapPlaylistForDisplay(p); return <div className="playlist-line" key={p.id}><div><strong>{view.name}</strong><span>{view.sourceType} • {view.enabled ? 'Activée' : 'Désactivée'}{view.lastSyncedAt ? ` • ${new Date(view.lastSyncedAt).toLocaleString('fr-FR')}` : ''}</span></div><div className="playlist-actions"><button className="outline" onClick={()=>togglePlaylist(p)}><Power size={15}/> {view.enabled ? 'Désactiver' : 'Activer'}</button><button className="outline" disabled={loading} onClick={()=>refreshPlaylist(p)}><RefreshCw size={15}/> Actualiser</button><button className="outline danger" onClick={()=>deletePlaylist(p.id)}><Trash2 size={15}/> Supprimer</button></div></div>})}<button className="primary" onClick={()=>{setSourceMode('m3u');setMessage('');setPlaylistModal(true)}}><Plus size={18}/> Ajouter une playlist</button>{message && <div className="notice">{message}</div>}</section> : <section className="media-row"><div className="section-title"><h3>{search ? `${visible.length} résultat${visible.length>1?'s':''}` : 'Votre catalogue'}</h3>{!search && <span>Synchronisé <RefreshCw size={14}/></span>}</div>{visible.length ? <div className="grid">{visible.map(item=><Card key={item.id} item={item} favorite={favorites.includes(item.id)} onFavorite={toggleFavorite} onPlay={item=>{recordHistory(item);setPlayItem(item)}}/>)}</div> : <div className="empty">Aucun contenu dans cette section.</div>}</section>}
