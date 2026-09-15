@@ -1,0 +1,6 @@
+-- Regression specification for the playlist import RLS bug.
+-- A signed-in user who owns a playlist must be able to INSERT media_items
+-- belonging to that playlist.
+-- The production migration should provide an INSERT WITH CHECK policy
+-- equivalent to:
+-- EXISTS (SELECT 1 FROM public.playlists p WHERE p.id = playlist_id AND p.user_id = auth.uid())
