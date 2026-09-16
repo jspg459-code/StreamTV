@@ -16,6 +16,19 @@ function getFetchOptions(timeoutMs = REQUEST_TIMEOUT_MS) {
   };
 }
 
+function candidateBaseUrls(baseUrl) {
+  const candidates = [baseUrl];
+  try {
+    const url = new URL(baseUrl);
+    const alternateProtocol = url.protocol === 'http:' ? 'https:' : 'http:';
+    url.protocol = alternateProtocol;
+    candidates.push(url.toString().replace(/\/$/, ''));
+  } catch {
+    // The normalized URL is validated by the caller.
+  }
+  return [...new Set(candidates)];
+}
+
 function proxyItems(items) {
   return items.map(item => ({
     ...item,
@@ -24,27 +37,37 @@ function proxyItems(items) {
 }
 
 async function fetchXtreamApi(baseUrl, username, password, action) {
-  try {
-    const response = await fetch(
-      buildXtreamApiUrl(baseUrl, username, password, action),
-      getFetchOptions(),
-    );
+  let lastResult = { ok: false, status: 0, data: null, timeout: false, baseUrl };
 
-    if (!response.ok) return { ok: false, status: response.status, data: null };
-
+  for (const candidate of candidateBaseUrls(baseUrl)) {
     try {
-      return { ok: true, status: response.status, data: await response.json() };
-    } catch {
-      return { ok: false, status: response.status, data: null };
+      const response = await fetch(
+        buildXtreamApiUrl(candidate, username, password, action),
+        getFetchOptions(),
+      );
+
+      if (!response.ok) {
+        lastResult = { ok: false, status: response.status, data: null, timeout: false, baseUrl: candidate };
+        continue;
+      }
+
+      try {
+        return { ok: true, status: response.status, data: await response.json(), timeout: false, baseUrl: candidate };
+      } catch {
+        lastResult = { ok: false, status: response.status, data: null, timeout: false, baseUrl: candidate };
+      }
+    } catch (error) {
+      lastResult = {
+        ok: false,
+        status: 0,
+        data: null,
+        timeout: error?.name === 'TimeoutError' || error?.name === 'AbortError',
+        baseUrl: candidate,
+      };
     }
-  } catch (error) {
-    return {
-      ok: false,
-      status: 0,
-      data: null,
-      timeout: error?.name === 'TimeoutError' || error?.name === 'AbortError',
-    };
   }
+
+  return lastResult;
 }
 
 async function importViaPlayerApi(baseUrl, username, password) {
@@ -55,10 +78,11 @@ async function importViaPlayerApi(baseUrl, username, password) {
     throw new Error('Les identifiants Xtream sont refusés par le serveur.');
   }
 
+  const effectiveBaseUrl = account.baseUrl || baseUrl;
   const [live, movies, series] = await Promise.all([
-    fetchXtreamApi(baseUrl, username, password, 'get_live_streams'),
-    fetchXtreamApi(baseUrl, username, password, 'get_vod_streams'),
-    fetchXtreamApi(baseUrl, username, password, 'get_series'),
+    fetchXtreamApi(effectiveBaseUrl, username, password, 'get_live_streams'),
+    fetchXtreamApi(effectiveBaseUrl, username, password, 'get_vod_streams'),
+    fetchXtreamApi(effectiveBaseUrl, username, password, 'get_series'),
   ]);
 
   const payload = {
@@ -67,12 +91,12 @@ async function importViaPlayerApi(baseUrl, username, password) {
     series: series.ok && Array.isArray(series.data) ? series.data : [],
   };
 
-  const items = normalizeXtreamItems(payload, baseUrl).filter(x => x.streamUrl).slice(0, 10000);
+  const items = normalizeXtreamItems(payload, effectiveBaseUrl).filter(x => x.streamUrl).slice(0, 10000);
   if (items.length) return { items: proxyItems(items), status: 200, timeout: false };
 
   return {
     items: null,
-    status: live.status || movies.status || series.status || 502,
+    status: live.status || movies.status || series.status || account.status || 502,
     timeout: Boolean(live.timeout || movies.timeout || series.timeout),
   };
 }
@@ -88,30 +112,29 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Serveur ou identifiants Xtream invalides.' }, { status: 400 });
     }
 
-    // Try the lightweight Xtream API first. This avoids downloading a huge M3U file
-    // and prevents a single expired AbortSignal from affecting later requests.
     const apiResult = await importViaPlayerApi(baseUrl, username, password);
     if (apiResult.items) {
       return NextResponse.json({ count: apiResult.items.length, items: apiResult.items });
     }
 
-    // Some providers disable the player API but still expose get.php.
-    try {
-      const playlistResponse = await fetch(
-        buildXtreamPlaylistUrl(baseUrl, username, password),
-        getFetchOptions(12000),
-      );
+    for (const candidate of candidateBaseUrls(baseUrl)) {
+      try {
+        const playlistResponse = await fetch(
+          buildXtreamPlaylistUrl(candidate, username, password),
+          getFetchOptions(12000),
+        );
 
-      if (playlistResponse.ok) {
-        const text = await playlistResponse.text();
-        const items = parseM3U(text).slice(0, 10000);
-        if (items.length) {
-          const proxied = proxyItems(items);
-          return NextResponse.json({ count: proxied.length, items: proxied });
+        if (playlistResponse.ok) {
+          const text = await playlistResponse.text();
+          const items = parseM3U(text).slice(0, 10000);
+          if (items.length) {
+            const proxied = proxyItems(items);
+            return NextResponse.json({ count: proxied.length, items: proxied });
+          }
         }
+      } catch {
+        // Continue with the next protocol candidate or return the API error below.
       }
-    } catch {
-      // Return the more useful API error below when the M3U fallback also fails.
     }
 
     if (apiResult.timeout) {
@@ -122,7 +145,7 @@ export async function POST(request) {
 
     if (apiResult.status >= 400) {
       return NextResponse.json({
-        error: `Le serveur Xtream a refusé la connexion (HTTP ${apiResult.status}). Vérifie l’adresse du serveur et tes identifiants.`,
+        error: `Le serveur Xtream a refusé la connexion (HTTP ${apiResult.status}). Le fournisseur bloque peut-être les connexions depuis le serveur web.`,
       }, { status: 502 });
     }
 
