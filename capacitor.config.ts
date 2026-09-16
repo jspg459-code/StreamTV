@@ -3,7 +3,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
 const config: CapacitorConfig = {
   appId: 'com.streamtv.player',
   appName: 'StreamTV',
-  webDir: '.next',
+  webDir: 'public',
   server: {
     url: 'https://stream-tv-sigma.vercel.app',
     cleartext: true,
