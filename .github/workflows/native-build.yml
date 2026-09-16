@@ -26,7 +26,7 @@ jobs:
       - run: npm install
       - run: npx cap add android
       - run: npx cap sync android
-      - run: ./android/gradlew assembleDebug
+      - run: ./android/gradlew --no-daemon assembleDebug
       - uses: actions/upload-artifact@v4
         with:
           name: streamtv-android-debug
@@ -47,9 +47,13 @@ jobs:
           PLIST="ios/App/App/Info.plist"
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$PLIST" || true
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoadsInMedia bool true" "$PLIST" || true
+      - name: Verify generated iOS project
+        run: |
+          test -f ios/App/App.xcodeproj/project.pbxproj
+          find ios/App -maxdepth 2 -name '*.xcworkspace' -o -name '*.xcodeproj'
       - name: Build unsigned iOS app
         run: |
-          xcodebuild -workspace ios/App/App.xcworkspace -scheme App -sdk iphoneos -configuration Release -derivedDataPath build/ios CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+          xcodebuild -project ios/App/App.xcodeproj -scheme App -sdk iphoneos -configuration Release -derivedDataPath build/ios CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
       - uses: actions/upload-artifact@v4
         with:
           name: streamtv-ios-unsigned
