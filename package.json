@@ -1,14 +1,20 @@
 {
   "name": "streamtv",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "vitest run"
+    "test": "vitest run",
+    "cap:sync": "npx cap sync",
+    "cap:android": "npx cap open android",
+    "cap:ios": "npx cap open ios"
   },
   "dependencies": {
+    "@capacitor/core": "latest",
+    "@capacitor/android": "latest",
+    "@capacitor/ios": "latest",
     "@supabase/supabase-js": "latest",
     "lucide-react": "latest",
     "next": "latest",
@@ -16,6 +22,7 @@
     "react-dom": "latest"
   },
   "devDependencies": {
+    "@capacitor/cli": "latest",
     "vitest": "latest"
   }
 }
