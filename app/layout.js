@@ -1,5 +1,4 @@
 import './globals.css';
-import NativePlaybackBridge from './components/NativePlaybackBridge.js';
 
 export const metadata = {
   title: 'StreamTV — Votre télévision, partout',
@@ -7,5 +6,5 @@ export const metadata = {
 };
 
 export default function RootLayout({ children }) {
-  return <html lang="fr"><body><NativePlaybackBridge />{children}</body></html>;
+  return <html lang="fr"><body>{children}</body></html>;
 }
